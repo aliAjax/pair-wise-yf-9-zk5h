@@ -360,6 +360,340 @@ label {
   margin-top: 12px;
 }
 
+/* ---------- 讲解接力牌 ---------- */
+.relay-ribbon {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  border-radius: 999px;
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 900;
+  color: #fff;
+}
+
+.relay-ribbon.live {
+  background: var(--green);
+}
+
+.relay-ribbon.waiting {
+  background: var(--red);
+}
+
+.relay-panel {
+  border: 2px dashed var(--lavender);
+  border-radius: 8px;
+  background: rgba(116, 100, 155, 0.07);
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.relay-panel.active {
+  border-style: solid;
+  background: rgba(116, 100, 155, 0.1);
+}
+
+.relay-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.relay-head h3 {
+  margin-bottom: 4px;
+}
+
+.relay-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.relay-badge {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 900;
+  color: #fff;
+}
+
+.relay-badge.idle {
+  background: var(--muted);
+}
+
+.relay-badge.live {
+  background: var(--green);
+}
+
+.relay-badge.waiting {
+  background: var(--red);
+}
+
+.relay-claim {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.relay-claim button {
+  white-space: nowrap;
+}
+
+.relay-categories {
+  display: grid;
+  gap: 8px;
+}
+
+.relay-category {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 9px 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.relay-category.active {
+  border-color: var(--green);
+  box-shadow: 0 0 0 2px rgba(57, 116, 91, 0.14);
+}
+
+.relay-category.handoff {
+  border-color: var(--red);
+  box-shadow: 0 0 0 2px rgba(179, 72, 72, 0.14);
+}
+
+.relay-category.done {
+  background: rgba(57, 116, 91, 0.06);
+}
+
+.relay-category.gap {
+  background: rgba(179, 72, 72, 0.06);
+  border-color: var(--red);
+}
+
+.relay-category-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.relay-status {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 900;
+  color: var(--lavender);
+  background: rgba(116, 100, 155, 0.13);
+}
+
+.relay-category.active .relay-status {
+  color: #fff;
+  background: var(--green);
+}
+
+.relay-category.handoff .relay-status {
+  color: #fff;
+  background: var(--red);
+}
+
+.relay-category.done .relay-status,
+.relay-category.gap .relay-status {
+  color: #fff;
+  background: var(--muted);
+}
+
+.relay-holders {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.relay-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.relay-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.relay-item .relay-text {
+  flex: 1;
+}
+
+.relay-item.pending {
+  color: var(--muted);
+}
+
+.relay-item.done .relay-text {
+  color: var(--muted);
+}
+
+.relay-item.gap .relay-text {
+  text-decoration: line-through;
+  color: var(--red);
+}
+
+.relay-check {
+  flex: 0 0 auto;
+  width: 18px;
+  text-align: center;
+  font-weight: 900;
+  color: var(--muted);
+}
+
+.relay-item.done .relay-check {
+  color: var(--green);
+}
+
+.relay-item.gap .relay-check {
+  color: var(--red);
+}
+
+.relay-check-label {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  cursor: pointer;
+}
+
+.relay-check-label input {
+  width: auto;
+  margin: 0 2px 0 0;
+}
+
+.relay-teller {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: rgba(49, 95, 134, 0.1);
+  color: var(--blue);
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.relay-item.gap .relay-teller {
+  background: rgba(179, 72, 72, 0.12);
+  color: var(--red);
+}
+
+.relay-finish {
+  justify-self: start;
+  padding: 6px 12px;
+  font-size: 13px;
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.relay-leave {
+  justify-self: start;
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.relay-gap {
+  border-color: var(--red);
+  color: var(--red);
+  font-weight: 800;
+}
+
+.relay-history {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.relay-history summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.relay-record {
+  margin-top: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 9px;
+  display: grid;
+  gap: 6px;
+}
+
+.relay-record.gap {
+  border-color: rgba(179, 72, 72, 0.45);
+}
+
+.relay-record-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.relay-record-outcome {
+  font-weight: 900;
+  color: var(--green);
+}
+
+.relay-record.gap .relay-record-outcome {
+  color: var(--red);
+}
+
+.relay-record-category p {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.relay-record-category ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.relay-record-category li {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.relay-record-mark {
+  flex: 0 0 auto;
+  width: 16px;
+  text-align: center;
+  font-weight: 900;
+  color: var(--green);
+}
+
+.relay-record-item.gap .relay-text {
+  text-decoration: line-through;
+  color: var(--red);
+}
+
+.relay-record-item.gap .relay-record-mark {
+  color: var(--red);
+}
+
 .detail-actions {
   display: flex;
   gap: 8px;
