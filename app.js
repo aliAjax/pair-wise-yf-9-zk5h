@@ -1,5 +1,15 @@
 const storageKey = "zfl18-boardgame-rule-cards";
+const relayStorageKey = "zfl18-relay-cards-v1";
+const historyStorageKey = "zfl18-relay-history-v1";
 const today = new Date();
+
+// 接力讲解的固定认领顺序：先讲开局，最后讲计分
+const relayCategories = [
+  { key: "setup", label: "开局准备" },
+  { key: "forgets", label: "容易忘的规则" },
+  { key: "disputes", label: "常见争议" },
+  { key: "scoring", label: "计分提醒" }
+];
 
 const defaultState = {
   selectedId: "",
@@ -52,6 +62,10 @@ const defaultState = {
 let state = loadState();
 if (!state.selectedId) state.selectedId = state.games[0]?.id || "";
 
+// 接力牌与历史记录各自独立存放，互不混入卡片库
+let relayStore = loadRelayStore();
+let historyStore = loadHistoryStore();
+
 const els = {
   searchInput: document.querySelector("#searchInput"),
   playerFilter: document.querySelector("#playerFilter"),
@@ -85,6 +99,60 @@ function loadState() {
 
 function saveState() {
   localStorage.setItem(storageKey, JSON.stringify(state));
+}
+
+function loadJsonStore(key, fallback) {
+  const saved = localStorage.getItem(key);
+  if (!saved) return structuredClone(fallback);
+  try {
+    return { ...structuredClone(fallback), ...JSON.parse(saved) };
+  } catch {
+    return structuredClone(fallback);
+  }
+}
+
+function loadRelayStore() {
+  const store = loadJsonStore(relayStorageKey, { ui: { tab: "cards" }, cards: {} });
+  store.cards = store.cards || {};
+  store.ui = store.ui || { tab: "cards" };
+  return store;
+}
+
+function loadHistoryStore() {
+  const store = loadJsonStore(historyStorageKey, { events: [] });
+  store.events = Array.isArray(store.events) ? store.events : [];
+  return store;
+}
+
+function saveRelayStore() {
+  localStorage.setItem(relayStorageKey, JSON.stringify(relayStore));
+}
+
+function saveHistoryStore() {
+  localStorage.setItem(historyStorageKey, JSON.stringify(historyStore));
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function formatTime(iso) {
+  const date = new Date(iso);
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+// 历史只追加，不改写：断档、转交等记录都会一直保留
+function addHistory(gameId, gameName, type, detail) {
+  historyStore.events.push({
+    id: crypto.randomUUID(),
+    at: nowIso(),
+    gameId,
+    gameName,
+    type,
+    detail
+  });
+  saveHistoryStore();
 }
 
 function daysSince(dateString) {
@@ -131,6 +199,7 @@ function renderList() {
     games
       .map((game) => {
         const selected = game.id === state.selectedId ? "selected" : "";
+        const activeRelay = relayStore.cards[game.id] && !relayStore.cards[game.id].completed;
         return `
           <article class="game-card ${selected}" data-game-id="${game.id}">
             <div class="cover">
@@ -140,6 +209,7 @@ function renderList() {
                   : `<span>${escapeHtml(game.name.slice(0, 2))}</span>`
               }
               <span class="stale-ribbon">${daysSince(game.lastPlayed)}天未玩</span>
+              ${activeRelay ? `<span class="relay-ribbon">接力进行中</span>` : ""}
             </div>
             <div class="game-body">
               <h3>${escapeHtml(game.name)}</h3>
@@ -162,7 +232,18 @@ function renderDetail() {
     return;
   }
   state.selectedId = game.id;
+  const tab = relayStore.ui.tab === "relay" ? "relay" : "cards";
   els.detailView.innerHTML = `
+    <div class="detail-tabs" role="tablist">
+      <button type="button" class="detail-tab ${tab === "cards" ? "active" : ""}" data-tab="cards">复习卡片</button>
+      <button type="button" class="detail-tab ${tab === "relay" ? "active" : ""}" data-tab="relay">讲解接力</button>
+    </div>
+    ${tab === "cards" ? renderQuickCard(game) : `<div class="relay-wrap">${renderRelay(game)}</div>`}
+  `;
+}
+
+function renderQuickCard(game) {
+  return `
     <div class="quick-card">
       <div class="detail-cover">
         ${game.cover ? `<img src="${game.cover}" alt="${escapeHtml(game.name)}封面" />` : `<span>${escapeHtml(game.name.slice(0, 2))}</span>`}
@@ -214,6 +295,405 @@ function renderRuleSection(title, key, items) {
               `
             )
             .join("") || `<li><span>暂无内容。</span></li>`
+        }
+      </ul>
+    </section>
+  `;
+}
+
+/* ---------------- 讲解接力牌 ---------------- */
+
+function createRelayCard(game) {
+  const slots = {};
+  for (const category of relayCategories) {
+    const items = (game[category.key] || []).map((text) => ({
+      id: crypto.randomUUID(),
+      text,
+      told: false,
+      gap: false,
+      tellerId: "",
+      tellerName: "",
+      at: ""
+    }));
+    slots[category.key] = items.length
+      ? { assigneeId: null, status: "pending", skipped: false, items }
+      : { assigneeId: null, status: "done", skipped: true, items };
+  }
+  relayStore.cards[game.id] = {
+    gameId: game.id,
+    gameName: game.name,
+    createdAt: nowIso(),
+    completed: false,
+    people: [],
+    slots
+  };
+  saveRelayStore();
+  addHistory(game.id, game.name, "started", "接力牌已挂出，按到场顺序认领四类提醒");
+  checkRelayComplete(relayStore.cards[game.id]);
+}
+
+// 到场者按顺序认领：顺序最靠前的待认领/断档一类归他
+function claimNextSlot(card, person) {
+  for (const category of relayCategories) {
+    const slot = card.slots[category.key];
+    if (slot.status !== "pending" && slot.status !== "gap") continue;
+    const wasGap = slot.status === "gap";
+    slot.assigneeId = person.id;
+    slot.status = "active";
+    addHistory(
+      card.gameId,
+      card.gameName,
+      "arrive",
+      wasGap
+        ? `${person.name} 第${person.order}位到场，补讲认领「${category.label}」`
+        : `${person.name} 第${person.order}位到场，认领「${category.label}」`
+    );
+    return category.label;
+  }
+  addHistory(card.gameId, card.gameName, "arrive", `${person.name} 第${person.order}位到场，四类已认领完，进入候补`);
+  return "";
+}
+
+function arrivePerson(card, name) {
+  const person = {
+    id: crypto.randomUUID(),
+    name,
+    order: card.people.length + 1,
+    at: nowIso(),
+    status: "present"
+  };
+  card.people.push(person);
+  claimNextSlot(card, person);
+  saveRelayStore();
+  checkRelayComplete(card);
+}
+
+function getPerson(card, personId) {
+  return card.people.find((person) => person.id === personId);
+}
+
+function getPresentAfter(card, personId) {
+  const index = card.people.findIndex((person) => person.id === personId);
+  const after = card.people.slice(index + 1).filter((person) => person.status === "present");
+  const free = after.find(
+    (person) =>
+      !relayCategories.some((category) => {
+        const other = card.slots[category.key];
+        return other.assigneeId === person.id && other.status === "active";
+      })
+  );
+  return free || after[0];
+}
+
+// 临时离席：只转交未讲内容，已讲条目不动；没有下一位在场则断档
+function leavePerson(card, personId) {
+  const person = getPerson(card, personId);
+  if (!person || person.status === "left") return;
+  person.status = "left";
+  addHistory(card.gameId, card.gameName, "leave", `${person.name} 临时离席`);
+
+  for (const category of relayCategories) {
+    const slot = card.slots[category.key];
+    if (slot.assigneeId !== person.id) continue;
+    const remaining = slot.items.filter((item) => !item.told);
+    if (remaining.length === 0) {
+      if (slot.status !== "done") {
+        slot.status = "done";
+        addHistory(card.gameId, card.gameName, "slot-done", `「${category.label}」已全部讲完（${person.name}）`);
+      }
+      continue;
+    }
+    const next = getPresentAfter(card, person.id);
+    if (next) {
+      slot.assigneeId = next.id;
+      slot.status = "active";
+      addHistory(
+        card.gameId,
+        card.gameName,
+        "handoff",
+        `${person.name} 离席，「${category.label}」剩余 ${remaining.length} 条转给下一位 ${next.name}；已讲条目仍记在 ${person.name} 名下`
+      );
+    } else {
+      remaining.forEach((item) => {
+        item.gap = true;
+      });
+      slot.assigneeId = null;
+      slot.status = "gap";
+      addHistory(
+        card.gameId,
+        card.gameName,
+        "gap",
+        `${person.name} 离席后无人承接，「${category.label}」剩余 ${remaining.length} 条记为断档`
+      );
+    }
+  }
+  saveRelayStore();
+  checkRelayComplete(card);
+}
+
+function tellItem(card, slotKey, itemId) {
+  const slot = card.slots[slotKey];
+  const category = relayCategories.find((item) => item.key === slotKey);
+  const person = getPerson(card, slot.assigneeId);
+  if (!slot || slot.status !== "active" || !person || person.status !== "present") return;
+  const item = slot.items.find((entry) => entry.id === itemId);
+  if (!item || item.told) return;
+  item.told = true;
+  item.tellerId = person.id;
+  item.tellerName = person.name;
+  item.at = nowIso();
+  addHistory(card.gameId, card.gameName, "told", `${person.name} 讲完「${category.label}」：${item.text}`);
+  if (slot.items.every((entry) => entry.told)) {
+    slot.status = "done";
+    addHistory(card.gameId, card.gameName, "slot-done", `「${category.label}」全部讲完`);
+  }
+  saveRelayStore();
+  checkRelayComplete(card);
+}
+
+function finishSlot(card, slotKey) {
+  const slot = card.slots[slotKey];
+  const category = relayCategories.find((item) => item.key === slotKey);
+  const person = getPerson(card, slot.assigneeId);
+  if (!slot || slot.status !== "active" || !person || person.status !== "present") return;
+  const remaining = slot.items.filter((item) => !item.told);
+  const at = nowIso();
+  remaining.forEach((item) => {
+    item.told = true;
+    item.tellerId = person.id;
+    item.tellerName = person.name;
+    item.at = at;
+  });
+  slot.status = "done";
+  addHistory(
+    card.gameId,
+    card.gameName,
+    "slot-done",
+    `「${category.label}」全部讲完，最后 ${remaining.length} 条由 ${person.name} 一次记完`
+  );
+  saveRelayStore();
+  checkRelayComplete(card);
+}
+
+// 招领未开场的一类：优先给没有认领任务的在场者，否则给第一位在场者
+function claimOpenSlot(card, slotKey) {
+  const slot = card.slots[slotKey];
+  const category = relayCategories.find((item) => item.key === slotKey);
+  if (!slot || (slot.status !== "gap" && slot.status !== "pending")) return;
+  const present = card.people.filter((person) => person.status === "present");
+  const ownsActive = (person) =>
+    relayCategories.some((entry) => {
+      const other = card.slots[entry.key];
+      return other.assigneeId === person.id && other.status === "active";
+    });
+  const person = present.find((candidate) => !ownsActive(candidate)) || present[0];
+  if (!person) return;
+  const wasGap = slot.items.some((item) => item.gap);
+  slot.assigneeId = person.id;
+  slot.status = "active";
+  addHistory(
+    card.gameId,
+    card.gameName,
+    "resume",
+    wasGap
+      ? `${person.name} 承接断档，补讲「${category.label}」`
+      : `${person.name} 认领「${category.label}」`
+  );
+  saveRelayStore();
+  checkRelayComplete(card);
+}
+
+function checkRelayComplete(card) {
+  const countable = relayCategories.filter((category) => !card.slots[category.key].skipped);
+  if (card.people.length > 0 && !card.completed && countable.every((category) => card.slots[category.key].status === "done")) {
+    card.completed = true;
+    addHistory(card.gameId, card.gameName, "done", "四类提醒全部讲完，本场接力结束");
+    saveRelayStore();
+  }
+}
+
+function resetRelayCard(card) {
+  addHistory(card.gameId, card.gameName, "reset", "接力牌重开，历史记录保留");
+  delete relayStore.cards[card.gameId];
+  saveRelayStore();
+}
+
+function slotLabelsForPerson(card, personId) {
+  return relayCategories
+    .filter((category) => card.slots[category.key].assigneeId === personId)
+    .map((category) => category.label);
+}
+
+function renderRelay(game) {
+  const card = relayStore.cards[game.id];
+  if (!card) {
+    const counts = relayCategories.map((category) => ({
+      ...category,
+      count: (game[category.key] || []).length
+    }));
+    return `
+      <section class="relay-board relay-empty">
+        <h2>讲解接力牌</h2>
+        <p class="relay-note">挂出后快照当前四类提醒，到场者按固定顺序认领；正在讲的人离席时，未讲内容转给下一位，已讲条目保留原讲述人。</p>
+        <ol class="relay-order">
+          ${counts
+            .map((category, index) => `<li><span class="order-no">${index + 1}</span>${category.label}<em>${category.count} 条</em></li>`)
+            .join("")}
+        </ol>
+        <button type="button" class="primary" data-action="create-card">挂上接力牌</button>
+      </section>
+    `;
+  }
+
+  const doneCount = relayCategories.filter((category) => card.slots[category.key].status === "done").length;
+  const totalCount = relayCategories.filter((category) => !card.slots[category.key].skipped).length;
+  const hasPresentBackup = card.people.some(
+    (person) => person.status === "present" && !slotLabelsForPerson(card, person.id).length
+  );
+
+  return `
+    <section class="relay-board">
+      <div class="relay-head">
+        <h2>讲解接力牌</h2>
+        <span class="relay-progress">${doneCount}/${totalCount} 类讲完</span>
+      </div>
+      ${card.completed ? `<p class="relay-banner">四类提醒已全部讲完，可开始本局。</p>` : ""}
+      <p class="relay-note">接力牌快照于挂出时，之后修改复习卡片不影响本场进度。</p>
+
+      <form class="arrive-form" id="arriveForm">
+        <input id="arriveName" type="text" maxlength="12" placeholder="到场者姓名，按签到顺序认领" required />
+        <button class="primary" type="submit">到场签到</button>
+      </form>
+
+      <ol class="people-list">
+        ${
+          card.people
+            .map(
+              (person) => `
+                <li class="${person.status === "left" ? "left" : ""}">
+                  <span class="people-no">#${person.order}</span>
+                  <span class="people-name">${escapeHtml(person.name)}</span>
+                  <span class="people-tags">
+                    ${slotLabelsForPerson(card, person.id).map((label) => `<em class="slot-tag">${label}</em>`).join("")}
+                    ${person.status === "left" ? `<em class="left-tag">已离席</em>` : `<em class="present-tag">在场</em>`}
+                  </span>
+                  ${
+                    person.status === "present"
+                      ? `<button type="button" class="tiny" data-action="leave" data-person="${person.id}">临时离席</button>`
+                      : ""
+                  }
+                </li>
+              `
+            )
+            .join("") || `<li class="people-empty">还没有人到场，第一位签到者认领「开局准备」。</li>`
+        }
+      </ol>
+
+      <div class="slot-list">
+        ${relayCategories.map((category) => renderRelaySlot(category, card, hasPresentBackup)).join("")}
+      </div>
+
+      <div class="relay-footer">
+        <button type="button" class="tiny danger" data-action="reset-card">重开这张接力牌</button>
+      </div>
+    </section>
+    ${renderHistory(game)}
+  `;
+}
+
+function renderRelaySlot(category, card, hasPresentBackup) {
+  const slot = card.slots[category.key];
+  const assignee = getPerson(card, slot.assigneeId);
+  const statusText = {
+    pending: "等待认领",
+    active: "讲解中",
+    done: slot.skipped ? "本类无提醒，自动跳过" : "已讲完",
+    gap: "断档"
+  }[slot.status];
+
+  const headerActions = (() => {
+    if (slot.status === "active" && assignee && assignee.status === "present") {
+      const remaining = slot.items.filter((item) => !item.told).length;
+      return `<button type="button" class="tiny" data-action="finish-slot" data-slot="${category.key}" ${remaining ? "" : "disabled"}>这类全部讲完</button>`;
+    }
+    if (slot.status === "gap" || slot.status === "pending") {
+      const present = card.people.some((person) => person.status === "present");
+      const label = slot.status === "gap" ? "招领补讲" : "认领这类";
+      return `<button type="button" class="tiny ${slot.status === "gap" ? "warn" : ""}" data-action="claim-open" data-slot="${category.key}" ${present ? "" : "disabled"}>${label}${present && !hasPresentBackup ? "（兼讲）" : ""}</button>`;
+    }
+    return "";
+  })();
+
+  return `
+    <section class="slot-card st-${slot.status}">
+      <header class="slot-head">
+        <div>
+          <h3>${category.label}</h3>
+          <span class="slot-status">${statusText}${assignee ? ` · ${escapeHtml(assignee.name)}` : ""}</span>
+        </div>
+        ${headerActions}
+      </header>
+      <ul class="relay-items">
+        ${
+          slot.items
+            .map((item) => {
+              if (item.told) {
+                return `
+                  <li class="relay-item told">
+                    <span class="item-check" title="已讲完">✓</span>
+                    <span class="item-text">${escapeHtml(item.text)}</span>
+                    <span class="item-meta">${escapeHtml(item.tellerName)} · ${formatTime(item.at)}</span>
+                  </li>
+                `;
+              }
+              const canTell = slot.status === "active" && assignee && assignee.status === "present";
+              return `
+                <li class="relay-item ${item.gap ? "gapped" : ""}">
+                  <span class="item-check pending"></span>
+                  <span class="item-text">${escapeHtml(item.text)}</span>
+                  <span class="item-meta">
+                    ${item.gap ? `<em class="gap-tag">断档</em>` : ""}
+                    ${
+                      canTell
+                        ? `<button type="button" class="tiny" data-action="tell-item" data-slot="${category.key}" data-item="${item.id}">讲完（记给 ${escapeHtml(assignee.name)}）</button>`
+                        : slot.status === "gap"
+                          ? "等待补讲"
+                          : "未讲"
+                    }
+                  </span>
+                </li>
+              `;
+            })
+            .join("") || `<li class="relay-item"><span class="item-text">本类暂无提醒。</span></li>`
+        }
+      </ul>
+    </section>
+  `;
+}
+
+function renderHistory(game) {
+  const events = historyStore.events
+    .filter((event) => event.gameId === game.id)
+    .reverse()
+    .slice(0, 30);
+  return `
+    <section class="history-panel">
+      <h2>历史记录</h2>
+      <ul class="history-list">
+        ${
+          events
+            .map(
+              (event) => `
+                <li class="history-item history-${event.type}">
+                  <span class="history-dot"></span>
+                  <div>
+                    <p>${escapeHtml(event.detail)}</p>
+                    <time>${formatTime(event.at)}</time>
+                  </div>
+                </li>
+              `
+            )
+            .join("") || `<li class="empty">本场还没有历史记录。</li>`
         }
       </ul>
     </section>
@@ -295,22 +775,81 @@ els.gameList.addEventListener("click", (event) => {
 });
 
 els.detailView.addEventListener("submit", (event) => {
-  if (event.target.id !== "ruleForm") return;
-  event.preventDefault();
-  const game = state.games.find((item) => item.id === state.selectedId);
-  if (!game) return;
-  const key = document.querySelector("#ruleTypeInput").value;
-  const text = document.querySelector("#ruleTextInput").value.trim();
-  if (!text) return;
-  game[key].push(text);
-  renderAll();
+  if (event.target.id === "ruleForm") {
+    event.preventDefault();
+    const game = state.games.find((item) => item.id === state.selectedId);
+    if (!game) return;
+    const key = document.querySelector("#ruleTypeInput").value;
+    const text = document.querySelector("#ruleTextInput").value.trim();
+    if (!text) return;
+    game[key].push(text);
+    renderAll();
+    return;
+  }
+
+  if (event.target.id === "arriveForm") {
+    event.preventDefault();
+    const input = document.querySelector("#arriveName");
+    const name = input.value.trim();
+    const card = relayStore.cards[state.selectedId];
+    if (!card || !name) return;
+    arrivePerson(card, name);
+    renderAll();
+  }
 });
 
 els.detailView.addEventListener("click", (event) => {
+  const tabButton = event.target.closest("[data-tab]");
+  if (tabButton) {
+    relayStore.ui.tab = tabButton.dataset.tab;
+    saveRelayStore();
+    renderDetail();
+    return;
+  }
+
+  const actionButton = event.target.closest("[data-action]");
+  const game = state.games.find((item) => item.id === state.selectedId);
+  if (actionButton && game) {
+    const action = actionButton.dataset.action;
+    let card = relayStore.cards[game.id];
+    if (action === "create-card") {
+      createRelayCard(game);
+      renderAll();
+      return;
+    }
+    if (!card) return;
+    if (action === "leave") {
+      leavePerson(card, actionButton.dataset.person);
+      renderAll();
+      return;
+    }
+    if (action === "tell-item") {
+      tellItem(card, actionButton.dataset.slot, actionButton.dataset.item);
+      renderAll();
+      return;
+    }
+    if (action === "finish-slot") {
+      finishSlot(card, actionButton.dataset.slot);
+      renderAll();
+      return;
+    }
+    if (action === "claim-gap" || action === "claim-open") {
+      claimOpenSlot(card, actionButton.dataset.slot);
+      renderAll();
+      return;
+    }
+    if (action === "reset-card") {
+      if (window.confirm("重开接力牌会清空本场认领和讲完进度，但历史记录保留。确定重开？")) {
+        resetRelayCard(card);
+        renderAll();
+      }
+      return;
+    }
+  }
+
   const ruleButton = event.target.closest("[data-rule-key]");
   const playedButton = event.target.closest("#playedTodayBtn");
   const deleteButton = event.target.closest("#deleteGameBtn");
-  const game = state.games.find((item) => item.id === state.selectedId);
   if (!game) return;
 
   if (ruleButton) {
@@ -327,6 +866,9 @@ els.detailView.addEventListener("click", (event) => {
 
   if (deleteButton) {
     state.games = state.games.filter((item) => item.id !== game.id);
+    // 接力牌随收藏一起删除；历史记录只追加，继续保留
+    delete relayStore.cards[game.id];
+    saveRelayStore();
     state.selectedId = state.games[0]?.id || "";
     renderAll();
   }
